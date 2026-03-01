@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Bucket List</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #ddd;
+            border-collapse: collapse;
+            padding: 10px;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
+
+        #status_message {
+            white-space: pre-wrap;
+            margin-top: 10px;
+            font-family: monospace;
+            background: #f9f9f9;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        img {
+            max-width: 300px;
+            margin-top: 20px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .auth-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .auth-container h3 {
+            margin-top: 0;
+        }
+
+        .auth-container input {
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            box-sizing: border-box;
+        }
+
+        .auth-container button {
+            width: 100%;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #eee;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+
+        .logout-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- ================= Login Section ================= -->
+    <div id="login_section" class="auth-container">
+        <h3>Login</h3>
+        <p>Enter your email to receive an access token.</p>
+        <input type="email" id="login_email" placeholder="email@example.com">
+        <div id="token_container" class="hidden" style="margin-top: 10px;">
+            <label for="display_token" style="font-size: 0.8em; color: #666;">Your Access Token:</label>
+            <input type="text" id="display_token" readonly style="background: #eee; cursor: text;">
+        </div>
+        <button onclick="login()">Login / Generate Token</button>
+        <button onclick="logout()" style="margin-top: 10px; background-color: #6c757d;">Clear Local Session</button>
+        <div id="login_status" style="margin-top: 10px; color: red; font-size: 0.9em;"></div>
+        <div id="debug_log"
+            style="margin-top: 20px; font-size: 0.8em; color: #666; border-top: 1px dashed #ccc; padding-top: 10px;">
+        </div>
+    </div>
+
+    <!-- ================= Main Application Content ================= -->
+    <div id="main_content" class="hidden">
+        <div class="header-bar">
+            <h1>Bucket List</h1>
+            <div>
+                <span id="user_display" style="margin-right: 15px; font-weight: bold;"></span>
+                <span style="font-size: 0.85em; color: #666; margin-right: 10px;">Token: <input type="text"
+                        id="main_token_display" readonly
+                        style="width: 150px; background: #f9f9f9; border: 1px solid #ddd; padding: 2px 5px;"></span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <!-- ================= Upload Section ================= -->
+        <div class="upload-section"
+            style="background: #f4f4f4; padding: 20px; border-radius: 8px; margin-bottom: 30px;">
+            <h3>Upload New File</h3>
+
+            <div>
+                <label for="file_input">File:</label>
+                <input type="file" id="file_input">
+            </div>
+
+            <div style="margin-top: 10px;">
+                <label for="description_input">Description:</label>
+                <input type="text" id="description_input" placeholder="Enter file description"
+                    style="width: 100%; padding: 5px;">
+            </div>
+
+            <button style="margin-top: 15px; padding: 10px 20px; cursor: pointer;"
+                onclick="uploadObject()">Upload</button>
+            <div id="status_message" class="hidden"></div>
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            <button
+                style="padding: 10px 20px; cursor: pointer; background-color: #28a745; color: white; border: none; border-radius: 4px;"
+                onclick="fetchListOfObjects()">List Photos</button>
+        </div>
+
+        <table id="objectsTable" class="hidden" style="width: 100%;"></table>
+
+        <div style="text-align: center;">
+            <img id="download_image" src="" class="hidden">
+        </div>
+    </div>
+
+    <!-- ================= JavaScript ================= -->
+    <script>
+        // ================= Lambda Service URLs =================
+        // Orchestrator: Handles multi-step upload operations
+        const ORCHESTRATOR_URL = "";
+        // List: Fetches photo metadata from RDS database
+        const LIST_URL = "";
+        // Download: Fetches original high-res image from S3
+        const DOWNLOAD_URL = "";
+        // Delete: Orchestrates deletion across DB and S3
+        const DELETE_URL = "";
+        // Thumbnail: Fetches resized/compressed preview image
+        const THUMBNAIL_URL = "";
+
+        // Authentication URLs
+        const LOGIN_URL = "".trim();
+        const VERIFY_URL = "".trim();
+
+        // Debug logger
+        function logDebug(msg) {
+            const div = document.getElementById("debug_log");
+            if (div) div.innerHTML += `[${new Date().toLocaleTimeString()}] ${msg}<br>`;
+            console.log(msg);
+        }
+
+        // Run on load
+        logDebug("Page initialization...");
+        checkSession();
+
+        // Request a new authentication token from backend
+        function login() {
+            const emailInput = document.getElementById("login_email");
+            const statusDiv = document.getElementById("login_status");
+            const email = emailInput.value;
+
+            if (!email) {
+                statusDiv.innerText = "Please enter an email.";
+                return;
+            }
+
+            statusDiv.style.color = "blue";
+            statusDiv.innerText = "Generating token...";
+
+            logDebug(`Calling Login URL: ${LOGIN_URL}`);
+            fetch(LOGIN_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: email })
+            })
+                .then(async res => {
+                    const text = await res.text();
+                    logDebug(`Login Response Status: ${res.status}`);
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        throw new Error(`Server returned non-JSON: ${text.substring(0, 50)}`);
+                    }
+                })
+                .then(data => {
+                    // If login successful, save credentials and refresh UI
+                    if (data.token) {
+                        localStorage.setItem("cloud26_email", email);
+                        localStorage.setItem("cloud26_token", data.token);
+
+                        // Update UI with the new token
+                        const tokenInput = document.getElementById("display_token");
+                        const tokenContainer = document.getElementById("token_container");
+                        if (tokenInput && tokenContainer) {
+                            tokenInput.value = data.token;
+                            tokenContainer.classList.remove("hidden");
+                        }
+
+                        checkSession(); // Switch to main application view
+                    } else {
+                        statusDiv.style.color = "red";
+                        statusDiv.innerText = "Error: " + (data.error || "Failed to generate token");
+                    }
+                })
+                .catch(err => {
+                    statusDiv.style.color = "red";
+                    console.error("Login Details:", err);
+                    statusDiv.innerText = "Login failed: " + err.message;
+                });
+        }
+
+        function logout() {
+            localStorage.removeItem("cloud26_email");
+            localStorage.removeItem("cloud26_token");
+            location.reload();
+        }
+
+        // Validate stored session with backend
+        function checkSession() {
+            const email = localStorage.getItem("cloud26_email");
+            const token = localStorage.getItem("cloud26_token");
+
+            // Redirect to login if no credentials found
+            if (!email || !token) {
+                showSection("login_section");
+                return;
+            }
+
+            logDebug(`Checking session for: ${email}`);
+
+            fetch(VERIFY_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, token })
+            })
+                .then(async res => {
+                    const text = await res.text();
+                    logDebug(`Verify Response Status: ${res.status}`);
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        throw new Error(`Verification Error: ${text.substring(0, 50)}`);
+                    }
+                })
+                .then(data => {
+                    if (data.valid) {
+                        // Session is valid, set up the main view
+                        document.getElementById("user_display").innerText = "User: " + email;
+                        const mainToken = document.getElementById("main_token_display");
+                        if (mainToken) mainToken.value = token;
+
+                        showSection("main_content");
+                        // fetchListOfObjects(); // Removed for manual listing requirement
+                    } else {
+                        // Invalid token: clear and return to login
+                        localStorage.removeItem("cloud26_token");
+                        showSection("login_section");
+                        document.getElementById("login_status").innerText = "Session expired. Please login again.";
+                    }
+                })
+                .catch(err => {
+                    console.error("Verification failed:", err.message);
+                    showSection("login_section");
+                    document.getElementById("login_status").innerText = "Verification error: " + err.message;
+                });
+        }
+
+        function showSection(id) {
+            document.getElementById("login_section").className = (id === "login_section" ? "auth-container" : "hidden");
+            document.getElementById("main_content").className = (id === "main_content" ? "" : "hidden");
+        }
+
+        // ================= Upload =================
+        function uploadObject() {
+            const fileInput = document.getElementById("file_input");
+            const descInput = document.getElementById("description_input");
+            const statusDiv = document.getElementById("status_message");
+
+            if (fileInput.files.length === 0) {
+                alert("Please select a file first.");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            statusDiv.className = "";
+            statusDiv.innerText = "Processing upload...";
+
+            const reader = new FileReader();
+            reader.readAsArrayBuffer(file);
+
+            reader.onload = () => {
+                const data = new Uint8Array(reader.result);
+
+                const payload = {
+                    content: data.toBase64(),
+                    key: file.name,
+                    description: descInput.value,
+                    // Pass auth info if your workers check it
+                    email: localStorage.getItem("cloud26_email"),
+                    token: localStorage.getItem("cloud26_token")
+                };
+
+                sendToOrchestrator(payload);
+            };
+
+            reader.onerror = () => {
+                statusDiv.innerText = "Error reading file.";
+            };
+        }
+
+        function sendToOrchestrator(body) {
+            const statusDiv = document.getElementById("status_message");
+
+            fetch(ORCHESTRATOR_URL, {
+                method: "POST",
+                body: JSON.stringify(body)
+            })
+                .then(res => res.json())
+                .then(data => {
+                    statusDiv.innerText = JSON.stringify(data, null, 4);
+                    fetchListOfObjects();
+                })
+                .catch(err => {
+                    statusDiv.innerText = "Upload failed: " + err.message;
+                });
+        }
+
+        // ================= List Objects =================
+        function fetchListOfObjects() {
+            fetch(LIST_URL)
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error(`HTTP error: ${res.status}`);
+                    }
+                    return res.text();
+                })
+                .then(renderListOfObjects)
+                .catch(err => console.error(err.message));
+        }
+
+        function renderListOfObjects(text) {
+            const table = document.getElementById("objectsTable");
+            table.className = ""; // Show table when data is loaded
+            table.innerHTML = "<tr><th>Thumbnail</th><th>Filename</th><th>Description</th><th>Email</th><th>Actions</th></tr>";
+
+            const objects = JSON.parse(text);
+
+            objects.forEach(obj => {
+                const row = document.createElement("tr");
+
+                // Property Fallback
+                const s3Key = obj.S3Key || obj.s3key || obj.key || "undefined";
+                const description = obj.Description || "N/A";
+                const email = obj.Email || "N/A";
+                const currentUser = localStorage.getItem("cloud26_email");
+
+                // Thumbnail
+                const thumbCell = document.createElement("td");
+                thumbCell.style.textAlign = "center";
+                const img = document.createElement("img");
+                img.style.width = "50px";
+                img.style.marginTop = "0";
+                img.alt = "Loading...";
+                fetchThumbnail(s3Key, img);
+                thumbCell.appendChild(img);
+                row.appendChild(thumbCell);
+
+                // Key
+                const keyCell = document.createElement("td");
+                keyCell.innerText = s3Key;
+                row.appendChild(keyCell);
+
+                // Description
+                const descCell = document.createElement("td");
+                descCell.innerText = description;
+                row.appendChild(descCell);
+
+                // Email
+                const emailCell = document.createElement("td");
+                emailCell.innerText = email;
+                row.appendChild(emailCell);
+
+                // Actions
+                const actionCell = document.createElement("td");
+
+                const downloadBtn = document.createElement("button");
+                downloadBtn.innerText = "Download";
+                downloadBtn.style.marginRight = "5px";
+                downloadBtn.onclick = () => fetchObject(s3Key);
+                actionCell.appendChild(downloadBtn);
+
+                // Always show delete button, but backend will check ownership
+                const deleteBtn = document.createElement("button");
+                deleteBtn.innerText = "Delete";
+                deleteBtn.className = "logout-btn";
+                deleteBtn.onclick = () => {
+                    if (confirm("Are you sure you want to delete " + s3Key + "?")) {
+                        deleteObject(s3Key);
+                    }
+                };
+                actionCell.appendChild(deleteBtn);
+
+                row.appendChild(actionCell);
+
+                table.appendChild(row);
+            });
+        }
+
+        // ================= Thumbnail =================
+        function fetchThumbnail(key, img) {
+            fetch(THUMBNAIL_URL, {
+                method: "POST",
+                body: JSON.stringify({ key })
+            })
+                .then(res => {
+                    if (!res.ok) throw new Error("No thumbnail");
+                    return res.blob();
+                })
+                .then(blob => {
+                    img.src = URL.createObjectURL(blob);
+                })
+                .catch(() => {
+                    img.alt = "No Img";
+                });
+        }
+
+        // Fetch original high-resolution image
+        function fetchObject(key) {
+            const imgElement = document.getElementById("download_image");
+            // Call download handler URL with 'PUT' and file key
+            fetch(DOWNLOAD_URL, {
+                method: "PUT",
+                body: JSON.stringify({ key })
+            })
+                .then(res => res.blob()) // Convert image data to binary blob
+                .then(blob => {
+                    // Create temporary URL and display in <img> element
+                    imgElement.src = URL.createObjectURL(blob);
+                    imgElement.className = ""; // Show image
+                    imgElement.scrollIntoView();
+                });
+        }
+
+        // Trigger deletion of an object across all systems (S3/DB)
+        function deleteObject(key) {
+            fetch(DELETE_URL, {
+                method: "POST",
+                body: JSON.stringify({
+                    key,
+                    email: localStorage.getItem("cloud26_email"),
+                    token: localStorage.getItem("cloud26_token")
+                })
+            })
+                .then(async res => {
+                    if (!res.ok) {
+                        const data = await res.json();
+                        let errorMsg = "Failed to delete.";
+
+                        // Try to extract the specific error from the orchestrator's report
+                        if (data.Activity_1_DB_Delete) {
+                            try {
+                                const inner = JSON.parse(data.Activity_1_DB_Delete);
+                                errorMsg = inner.error || inner.message || data.Activity_1_DB_Delete;
+                            } catch (e) {
+                                errorMsg = data.Activity_1_DB_Delete;
+                            }
+                        }
+
+                        throw new Error(errorMsg);
+                    }
+                    fetchListOfObjects();
+                })
+                .catch(err => alert(err.message));
+        }
+
+        // ================= Base64 Polyfill =================
+        if (!Uint8Array.prototype.toBase64) {
+            Uint8Array.prototype.toBase64 = function () {
+                let binary = "";
+                for (let i = 0; i < this.length; i++) {
+                    binary += String.fromCharCode(this[i]);
+                }
+                return btoa(binary);
+            };
+        }
+    </script>
+
+</body>
+
+</html>
